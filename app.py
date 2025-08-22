@@ -1,8 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api import login
+from api import login, scraper
 # Create the FastAPI app
-app = FastAPI()
+app = FastAPI(
+    title="Hackathon Web Scraper API",
+    description="A powerful web scraping API with authentication and filtering capabilities",
+    version="1.0.0"
+)
 
 # Add CORS middleware
 app.add_middleware(
@@ -17,5 +21,6 @@ app.add_middleware(
 def root():
     return {"message": "Hackathon Scraper API is running 🚀"}
 
-# Include the login router
+# Include the routers
 app.include_router(login.router, prefix="/api")
+app.include_router(scraper.router, prefix="/api")
