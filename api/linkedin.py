@@ -4,6 +4,7 @@ from typing import List, Optional
 from services.linkedin_scraper import LinkedInScraper
 import asyncio
 import json
+from datetime import datetime
 
 router = APIRouter(prefix="/linkedin", tags=["LinkedIn Scraping"])
 
@@ -44,3 +45,53 @@ async def login_to_linkedin(request: LoginRequest):
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "message": "LinkedIn scraper is ready"}
+
+class JobSearchRequest(BaseModel):
+    email: str
+    password: str
+    job_title: str
+    max_jobs: int = 10
+
+@router.post("/jobs")
+async def search_jobs(request: JobSearchRequest):
+    """Search jobs from LinkedIn feed page using main search box"""
+    scraper = LinkedInScraper()
+    
+    try:
+        print(f"🚀 Starting job search from feed for: {request.job_title}")
+        await scraper.start_browser(headless=False, slow_mo=1000)
+        
+        # Use the feed page search function
+        jobs = await scraper.search_jobs_from_feed(
+            email=request.email,
+            password=request.password,
+            job_title=request.job_title,
+            max_jobs=request.max_jobs
+        )
+        
+        await scraper.close()
+        
+        if jobs:
+            return {
+                "success": True,
+                "message": f"Successfully scraped {len(jobs)} jobs",
+                "data": jobs,
+                "search_params": {
+                    "job_title": request.job_title,
+                    "max_jobs": request.max_jobs
+                }
+            }
+        else:
+            return {
+                "success": False,
+                "message": "No jobs found. Please check your search criteria or try different keywords.",
+                "data": [],
+                "search_params": {
+                    "job_title": request.job_title,
+                    "max_jobs": request.max_jobs
+                }
+            }
+        
+    except Exception as e:
+        await scraper.close()
+        raise HTTPException(status_code=500, detail=str(e))
