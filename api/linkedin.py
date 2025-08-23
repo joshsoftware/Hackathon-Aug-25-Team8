@@ -359,6 +359,301 @@ async def get_job_details_by_url(url: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class CompanySearchRequest(BaseModel):
+    email: str
+    password: str
+    company_name: str
+    max_companies: int = 10
+
+class CompanyDetailRequest(BaseModel):
+    email: str
+    password: str
+    company_urls: List[str]
+
+# Global storage for company details
+company_details_cache = {}
+
+@router.post("/companies")
+async def search_companies(request: CompanySearchRequest, background_tasks: BackgroundTasks):
+    """Search companies from LinkedIn feed page and automatically start background crawling for detailed info"""
+    scraper = LinkedInScraper()
+    
+    try:
+        print(f"🚀 Starting company search for: {request.company_name}")
+        await scraper.start_browser(headless=False, slow_mo=1000)
+        
+        # Search for companies
+        companies = await scraper.search_companies(
+            email=request.email,
+            password=request.password,
+            company_name=request.company_name,
+            max_companies=request.max_companies
+        )
+        
+        await scraper.close()
+        
+        if companies:
+            # Create a unique search ID for this batch of companies
+            search_id = f"company_search_{int(time.time())}"
+            
+            # Extract company URLs for background crawling
+            company_urls = []
+            
+            # Store the companies in the cache with their URLs as keys
+            for company in companies:
+                if company.get('url'):
+                    company_url = company['url']
+                    company_urls.append(company_url)
+                    company_details_cache[company_url] = {
+                        'basic_info': company,
+                        'detailed_info': None,
+                        'search_id': search_id,
+                        'status': 'pending'
+                    }
+            
+            # Automatically start background crawling of company details
+            if company_urls:
+                print(f"🔄 Automatically starting background crawling for {len(company_urls)} company URLs")
+                background_tasks.add_task(
+                    crawl_company_details_background,
+                    request.email,
+                    request.password,
+                    company_urls
+                )
+            
+            return {
+                "success": True,
+                "message": f"Successfully scraped {len(companies)} companies from LinkedIn. Background crawling started automatically.",
+                "data": companies,
+                "search_id": search_id,
+                "background_crawling": {
+                    "status": "started",
+                    "company_urls": len(company_urls),
+                    "message": "Detailed company information is being crawled in the background. Use the /company-details/{search_id} endpoint to check progress and retrieve detailed data."
+                },
+                "search_params": {
+                    "company_name": request.company_name,
+                    "max_companies": request.max_companies
+                }
+            }
+        else:
+            return {
+                "success": False,
+                "message": "No companies found. Please check your search criteria or try different keywords.",
+                "data": [],
+                "search_params": {
+                    "company_name": request.company_name,
+                    "max_companies": request.max_companies
+                }
+            }
+        
+    except Exception as e:
+        await scraper.close()
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def crawl_company_details_background(email: str, password: str, company_urls: List[str]):
+    """Background task to crawl company details from multiple URLs"""
+    try:
+        # Add longer sleep to ensure previous operations are complete
+        time.sleep(8)
+        print(f"🚀 Starting background crawling of {len(company_urls)} company URLs")
+        
+        # Start a new browser instance
+        scraper = LinkedInScraper()
+        await scraper.start_browser(headless=True)  # Use headless mode for background tasks
+        
+        # Login to LinkedIn
+        login_success = await scraper.login(email, password)
+        if not login_success:
+            print("❌ Login failed in background task")
+            await scraper.close()
+            return
+        
+        # Process each company URL
+        for company_url in company_urls:
+            try:
+                print(f"🔍 Processing company URL in background: {company_url}")
+                
+                # Update status to 'processing'
+                if company_url in company_details_cache:
+                    company_details_cache[company_url]['status'] = 'processing'
+                
+                # Scrape detailed company information
+                company_detail = await scraper.scrape_company_details(company_url)
+                
+                # Store the detailed information in the cache
+                if company_url in company_details_cache:
+                    company_details_cache[company_url]['detailed_info'] = company_detail
+                    company_details_cache[company_url]['status'] = 'completed'
+                    print(f"✅ Successfully scraped and stored details for company: {company_detail.get('name', 'Unknown')}")
+                else:
+                    # If the URL wasn't in the cache, add it
+                    company_details_cache[company_url] = {
+                        'basic_info': None,
+                        'detailed_info': company_detail,
+                        'search_id': 'manual',
+                        'status': 'completed'
+                    }
+                    print(f"✅ Added new company details to cache: {company_detail.get('name', 'Unknown')}")
+                
+                # Longer delay between requests to avoid rate limiting and ensure complete loading
+                await asyncio.sleep(5)
+                
+            except Exception as e:
+                print(f"❌ Error processing company URL {company_url}: {str(e)}")
+                if company_url in company_details_cache:
+                    company_details_cache[company_url]['status'] = 'failed'
+                    company_details_cache[company_url]['error'] = str(e)
+        
+        # Close the browser when done
+        await scraper.close()
+        print("✅ Background company crawling completed")
+        
+    except Exception as e:
+        print(f"❌ Background task error: {str(e)}")
+
+@router.post("/crawl-company-details")
+async def crawl_company_details(request: CompanyDetailRequest, background_tasks: BackgroundTasks):
+    """Start background crawling of company details from provided URLs"""
+    try:
+        # Validate company URLs
+        valid_urls = [url for url in request.company_urls if url and 'linkedin.com/company/' in url]
+        
+        if not valid_urls:
+            return {
+                "success": False,
+                "message": "No valid LinkedIn company URLs provided"
+            }
+        
+        # Add the background task
+        background_tasks.add_task(
+            crawl_company_details_background,
+            request.email,
+            request.password,
+            valid_urls
+        )
+        
+        # Initialize cache entries for these URLs if they don't exist
+        for url in valid_urls:
+            if url not in company_details_cache:
+                company_details_cache[url] = {
+                    'basic_info': None,
+                    'detailed_info': None,
+                    'search_id': 'manual',
+                    'status': 'pending'
+                }
+        
+        return {
+            "success": True,
+            "message": f"Started background crawling of {len(valid_urls)} company URLs",
+            "company_urls": valid_urls
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/company-details/{search_id}")
+async def get_company_details(search_id: str):
+    """Get all company details for a specific search ID"""
+    try:
+        # Filter companies by search ID
+        search_companies = {
+            url: details for url, details in company_details_cache.items()
+            if details.get('search_id') == search_id
+        }
+        
+        if not search_companies:
+            return {
+                "success": False,
+                "message": f"No companies found for search ID: {search_id}"
+            }
+        
+        # Count companies by status
+        status_counts = {
+            'pending': 0,
+            'processing': 0,
+            'completed': 0,
+            'failed': 0
+        }
+        
+        for company_url, details in search_companies.items():
+            status = details.get('status', 'unknown')
+            if status in status_counts:
+                status_counts[status] += 1
+        
+        # Prepare the response data
+        companies_data = []
+        for company_url, details in search_companies.items():
+            company_data = {
+                'url': company_url,
+                'status': details.get('status', 'unknown')
+            }
+            
+            # Include basic info if available
+            if details.get('basic_info'):
+                company_data.update(details['basic_info'])
+            
+            # Include detailed info if available
+            if details.get('detailed_info'):
+                # If there's overlap between basic and detailed info, detailed takes precedence
+                company_data.update(details['detailed_info'])
+            
+            # Add error if present
+            if details.get('error'):
+                company_data['error'] = details['error']
+                
+            companies_data.append(company_data)
+        
+        return {
+            "success": True,
+            "message": f"Found {len(search_companies)} companies for search ID: {search_id}",
+            "status_summary": status_counts,
+            "data": companies_data
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/company-details-url")
+async def get_company_details_by_url(url: str):
+    """Get company details for a specific URL"""
+    try:
+        if url not in company_details_cache:
+            return {
+                "success": False,
+                "message": f"No company details found for URL: {url}"
+            }
+        
+        details = company_details_cache[url]
+        
+        # Prepare the response data
+        company_data = {
+            'url': url,
+            'status': details.get('status', 'unknown')
+        }
+        
+        # Include basic info if available
+        if details.get('basic_info'):
+            company_data.update(details['basic_info'])
+        
+        # Include detailed info if available
+        if details.get('detailed_info'):
+            # If there's overlap between basic and detailed info, detailed takes precedence
+            company_data.update(details['detailed_info'])
+        
+        # Add error if present
+        if details.get('error'):
+            company_data['error'] = details['error']
+        
+        return {
+            "success": True,
+            "message": f"Found company details for URL: {url}",
+            "data": company_data
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 class CrawlSearchRequest(BaseModel):
     search_id: str
     email: str
