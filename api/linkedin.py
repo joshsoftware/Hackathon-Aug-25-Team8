@@ -51,34 +51,51 @@ class JobSearchRequest(BaseModel):
     password: str
     job_title: str
     max_jobs: int = 10
+    search_method: str = "direct_url"  # "feed", "direct", or "direct_url"
 
 @router.post("/jobs")
 async def search_jobs(request: JobSearchRequest):
-    """Search jobs from LinkedIn feed page using main search box"""
+    """Search jobs from LinkedIn using specified method"""
     scraper = LinkedInScraper()
     
     try:
-        print(f"🚀 Starting job search from feed for: {request.job_title}")
+        print(f"🚀 Starting job search for: {request.job_title} using {request.search_method} method")
         await scraper.start_browser(headless=False, slow_mo=1000)
         
-        # Use the feed page search function
-        jobs = await scraper.search_jobs_from_feed(
-            email=request.email,
-            password=request.password,
-            job_title=request.job_title,
-            max_jobs=request.max_jobs
-        )
+        # Use the appropriate search method
+        if request.search_method == "direct_url":
+            jobs = await scraper.search_jobs_direct_url(
+                email=request.email,
+                password=request.password,
+                job_title=request.job_title,
+                max_jobs=request.max_jobs
+            )
+        elif request.search_method == "direct":
+            jobs = await scraper.search_jobs_direct(
+                email=request.email,
+                password=request.password,
+                job_title=request.job_title,
+                max_jobs=request.max_jobs
+            )
+        else:
+            jobs = await scraper.search_jobs_from_feed(
+                email=request.email,
+                password=request.password,
+                job_title=request.job_title,
+                max_jobs=request.max_jobs
+            )
         
         await scraper.close()
         
         if jobs:
             return {
                 "success": True,
-                "message": f"Successfully scraped {len(jobs)} jobs",
+                "message": f"Successfully scraped {len(jobs)} jobs from LinkedIn jobs search page",
                 "data": jobs,
                 "search_params": {
                     "job_title": request.job_title,
-                    "max_jobs": request.max_jobs
+                    "max_jobs": request.max_jobs,
+                    "search_method": request.search_method
                 }
             }
         else:
@@ -88,7 +105,8 @@ async def search_jobs(request: JobSearchRequest):
                 "data": [],
                 "search_params": {
                     "job_title": request.job_title,
-                    "max_jobs": request.max_jobs
+                    "max_jobs": request.max_jobs,
+                    "search_method": request.search_method
                 }
             }
         
