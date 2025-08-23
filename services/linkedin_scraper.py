@@ -139,6 +139,348 @@ class LinkedInScraper:
         if self.playwright:
             await self.playwright.stop()
         print("✅ Browser closed successfully!")
+            
+    async def scrape_job_details(self, job_url: str):
+        """Scrape detailed job information from a specific job page URL"""
+        try:
+            print(f"🔍 Scraping detailed job information from: {job_url}")
+            
+            # Navigate to the job page
+            await self.page.goto(job_url, timeout=60000)
+            await self.page.wait_for_load_state('networkidle')
+            await asyncio.sleep(2)
+            
+            # Check if we're on a search page with job details panel or a dedicated job page
+            is_search_page = False
+            try:
+                # Check for job cards list which indicates we're on a search page
+                job_cards_list = await self.page.query_selector('.jobs-search-results-list')
+                job_details_panel = await self.page.query_selector('.jobs-search-two-pane__details')
+                
+                if job_cards_list and job_details_panel:
+                    is_search_page = True
+                    print("✅ Detected search page with job details panel")
+            except:
+                pass
+            
+            # Extract job details
+            job_details = {}
+            
+            # Extract job title
+            title_selectors = [
+                'h1.job-title',
+                'h1.topcard__title',
+                'h1',
+                '.job-details-jobs-unified-top-card__job-title',
+                '.jobs-unified-top-card__job-title',
+                '.jobs-search-results-list__text-title',
+                '.jobs-details-top-card__job-title',
+                '.jobs-details__main-title'
+            ]
+            
+            for selector in title_selectors:
+                try:
+                    title_element = await self.page.wait_for_selector(selector, timeout=3000)
+                    if title_element:
+                        job_details['title'] = await title_element.inner_text()
+                        break
+                except:
+                    continue
+                    
+            if 'title' not in job_details:
+                job_details['title'] = "N/A"
+            
+            # Extract company name
+            company_selectors = [
+                '.topcard__org-name-link',
+                '.jobs-unified-top-card__company-name',
+                '.job-details-jobs-unified-top-card__company-name',
+                'a.topcard__org-name-link',
+                '.jobs-unified-top-card__subtitle-primary-grouping a',
+                '.jobs-details-top-card__company-url',
+                '.jobs-details-top-card__company-info',
+                '.jobs-search-results-list__text-subtitle'
+            ]
+            
+            for selector in company_selectors:
+                try:
+                    company_element = await self.page.wait_for_selector(selector, timeout=3000)
+                    if company_element:
+                        job_details['company'] = await company_element.inner_text()
+                        break
+                except:
+                    continue
+                    
+            if 'company' not in job_details:
+                job_details['company'] = "N/A"
+            
+            # Extract location
+            location_selectors = [
+                '.topcard__flavor--bullet',
+                '.jobs-unified-top-card__bullet',
+                '.job-details-jobs-unified-top-card__bullet',
+                '.jobs-unified-top-card__subtitle-primary-grouping .jobs-unified-top-card__bullet',
+                '.jobs-unified-top-card__location',
+                '.jobs-details-top-card__bullet',
+                '.jobs-details-top-card__location',
+                '.jobs-search-results-list__text-location'
+            ]
+            
+            for selector in location_selectors:
+                try:
+                    location_element = await self.page.wait_for_selector(selector, timeout=3000)
+                    if location_element:
+                        job_details['location'] = await location_element.inner_text()
+                        break
+                except:
+                    continue
+                    
+            if 'location' not in job_details:
+                job_details['location'] = "N/A"
+            
+            # Extract job description
+            description_selectors = [
+                '.description__text',
+                '.show-more-less-html__markup',
+                '.jobs-description-content',
+                '.jobs-description__content',
+                '.job-details-jobs-unified-description__content',
+                '.jobs-box__html-content',
+                '.jobs-description',
+                '.jobs-details__description-container',
+                '#job-details'
+            ]
+            
+            for selector in description_selectors:
+                try:
+                    description_element = await self.page.wait_for_selector(selector, timeout=3000)
+                    if description_element:
+                        job_details['description'] = await description_element.inner_text()
+                        break
+                except:
+                    continue
+                    
+            if 'description' not in job_details:
+                job_details['description'] = "N/A"
+            
+            # Extract job criteria/requirements
+            criteria_selectors = [
+                '.description__job-criteria-list',
+                '.job-criteria-list',
+                '.jobs-unified-description__job-criteria-list',
+                '.job-details-jobs-unified-description__job-criteria-list',
+                '.jobs-description-details__list',
+                '.jobs-details__job-criteria-list',
+                '.jobs-box__list'
+            ]
+            
+            job_details['criteria'] = {}
+            
+            for selector in criteria_selectors:
+                try:
+                    criteria_elements = await self.page.query_selector_all(f"{selector} > li")
+                    if criteria_elements:
+                        for element in criteria_elements:
+                            try:
+                                label_element = await element.query_selector('.job-criteria-subheader')
+                                value_element = await element.query_selector('.job-criteria-text')
+                                
+                                if label_element and value_element:
+                                    label = await label_element.inner_text()
+                                    value = await value_element.inner_text()
+                                    job_details['criteria'][label.strip()] = value.strip()
+                            except:
+                                continue
+                        break
+                except:
+                    continue
+            
+            # Extract application details
+            application_selectors = [
+                '.jobs-apply-button',
+                '.jobs-s-apply',
+                '.jobs-unified-top-card__apply-button',
+                '.job-details-jobs-unified-top-card__apply-button',
+                '.jobs-details-top-card__apply-button',
+                '.jobs-apply-button--top-card',
+                'button:has-text("Easy Apply")',
+                'button:has-text("Apply")'
+            ]
+            
+            job_details['application_type'] = "Unknown"
+            
+            for selector in application_selectors:
+                try:
+                    apply_button = await self.page.wait_for_selector(selector, timeout=3000)
+                    if apply_button:
+                        button_text = await apply_button.inner_text()
+                        if "Apply" in button_text:
+                            if "Easy Apply" in button_text:
+                                job_details['application_type'] = "LinkedIn Easy Apply"
+                            else:
+                                job_details['application_type'] = "Apply on LinkedIn"
+                        break
+                except:
+                    continue
+            
+            # Extract posted date
+            date_selectors = [
+                '.posted-time-ago__text',
+                '.job-posted-time',
+                '.jobs-unified-top-card__posted-date',
+                '.job-details-jobs-unified-top-card__posted-date',
+                '.jobs-details-top-card__posted-date',
+                '.jobs-details-top-card__job-info time',
+                '.job-search-card__listdate',
+                'time'
+            ]
+            
+            for selector in date_selectors:
+                try:
+                    date_element = await self.page.wait_for_selector(selector, timeout=3000)
+                    if date_element:
+                        job_details['posted_date'] = await date_element.inner_text()
+                        break
+                except:
+                    continue
+                    
+            if 'posted_date' not in job_details:
+                job_details['posted_date'] = "N/A"
+            
+            # Extract number of applicants
+            applicants_selectors = [
+                '.num-applicants',
+                '.jobs-unified-top-card__applicant-count',
+                '.job-details-jobs-unified-top-card__applicant-count',
+                '.jobs-details-top-card__applicant-count',
+                '.jobs-details__applicant-count',
+                'span:has-text("applicants")',
+                'span:has-text("Over")'
+            ]
+            
+            for selector in applicants_selectors:
+                try:
+                    applicants_element = await self.page.wait_for_selector(selector, timeout=3000)
+                    if applicants_element:
+                        job_details['applicants'] = await applicants_element.inner_text()
+                        break
+                except:
+                    continue
+                    
+            if 'applicants' not in job_details:
+                job_details['applicants'] = "N/A"
+            
+            # Extract company details if available
+            company_details_selectors = [
+                '.jobs-company',
+                '.jobs-unified-top-card__company-info',
+                '.job-details-jobs-unified-top-card__company-info',
+                '.jobs-details-top-card__company-info',
+                '.jobs-company__box',
+                '.jobs-company-details'
+            ]
+            
+            job_details['company_details'] = {}
+            
+            for selector in company_details_selectors:
+                try:
+                    company_size_element = await self.page.wait_for_selector(f"{selector} .company-size", timeout=3000)
+                    if company_size_element:
+                        job_details['company_details']['size'] = await company_size_element.inner_text()
+                except:
+                    pass
+                
+                try:
+                    company_industry_element = await self.page.wait_for_selector(f"{selector} .company-industry", timeout=3000)
+                    if company_industry_element:
+                        job_details['company_details']['industry'] = await company_industry_element.inner_text()
+                except:
+                    pass
+            
+            # Extract hiring team information if available
+            try:
+                hiring_team_section = await self.page.query_selector('.jobs-details__meet-the-team-section')
+                if hiring_team_section:
+                    job_details['hiring_team'] = []
+                    team_members = await hiring_team_section.query_selector_all('li')
+                    for member in team_members:
+                        try:
+                            name_element = await member.query_selector('.artdeco-entity-lockup__title')
+                            role_element = await member.query_selector('.artdeco-entity-lockup__subtitle')
+                            
+                            if name_element and role_element:
+                                name = await name_element.inner_text()
+                                role = await role_element.inner_text()
+                                job_details['hiring_team'].append({
+                                    'name': name.strip(),
+                                    'role': role.strip()
+                                })
+                        except:
+                            continue
+            except:
+                pass
+                
+            # Extract skills match information if available
+            try:
+                skills_match_element = await self.page.query_selector('span:has-text("skills match")')
+                if skills_match_element:
+                    skills_text = await skills_match_element.inner_text()
+                    job_details['skills_match'] = skills_text.strip()
+            except:
+                pass
+                
+            # Extract job type (remote, hybrid, on-site)
+            try:
+                job_type_elements = await self.page.query_selector_all('.jobs-details-top-card__workplace-type')
+                if job_type_elements:
+                    for element in job_type_elements:
+                        job_type_text = await element.inner_text()
+                        if 'Remote' in job_type_text:
+                            job_details['workplace_type'] = 'Remote'
+                        elif 'Hybrid' in job_type_text:
+                            job_details['workplace_type'] = 'Hybrid'
+                        elif 'On-site' in job_type_text:
+                            job_details['workplace_type'] = 'On-site'
+            except:
+                pass
+                
+            # Extract education requirements
+            try:
+                education_section = await self.page.query_selector('h3:has-text("Education")')
+                if education_section:
+                    parent_section = await education_section.evaluate('node => node.parentElement')
+                    if parent_section:
+                        education_text = await self.page.evaluate('node => node.textContent', parent_section)
+                        job_details['education_requirements'] = education_text.replace('Education:', '').strip()
+            except:
+                pass
+                
+            # Extract experience requirements
+            try:
+                experience_section = await self.page.query_selector('h3:has-text("Experience")')
+                if experience_section:
+                    parent_section = await experience_section.evaluate('node => node.parentElement')
+                    if parent_section:
+                        experience_text = await self.page.evaluate('node => node.textContent', parent_section)
+                        job_details['experience_requirements'] = experience_text.replace('Experience:', '').strip()
+            except:
+                pass
+            
+            # Add metadata
+            job_details['url'] = job_url
+            job_details['scraped_at'] = datetime.now().isoformat()
+            job_details['is_search_page_view'] = is_search_page
+            
+            print(f"✅ Successfully scraped detailed job information: {job_details.get('title', 'Unknown Title')}")
+            return job_details
+            
+        except Exception as e:
+            print(f"❌ Error scraping job details from {job_url}: {str(e)}")
+            return {
+                "url": job_url,
+                "error": str(e),
+                "scraped_at": datetime.now().isoformat()
+            }
 
     async def search_jobs_from_feed(self, email: str, password: str, job_title: str, max_jobs: int = 10):
         """Search jobs from LinkedIn feed page using the main search box"""
@@ -607,6 +949,50 @@ class LinkedInScraper:
                                 break
                         except:
                             continue
+                    
+                    # If we couldn't extract company or location from the card, try clicking on it and getting from the details panel
+                    if company == "N/A" or job_location == "N/A":
+                        try:
+                            # Click on the job card to show details
+                            await card.click()
+                            await asyncio.sleep(2)  # Wait for details to load
+                            
+                            # Try to extract company from details panel
+                            if company == "N/A":
+                                company_detail_selectors = [
+                                    '.jobs-unified-top-card__company-name',
+                                    '.jobs-details-top-card__company-url',
+                                    '.jobs-details-top-card__company-info'
+                                ]
+                                
+                                for selector in company_detail_selectors:
+                                    try:
+                                        company_element = await self.page.wait_for_selector(selector, timeout=2000)
+                                        if company_element:
+                                            company = await company_element.inner_text()
+                                            break
+                                    except:
+                                        continue
+                            
+                            # Try to extract location from details panel
+                            if job_location == "N/A":
+                                location_detail_selectors = [
+                                    '.jobs-unified-top-card__bullet',
+                                    '.jobs-unified-top-card__location',
+                                    '.jobs-details-top-card__bullet',
+                                    '.jobs-details-top-card__location'
+                                ]
+                                
+                                for selector in location_detail_selectors:
+                                    try:
+                                        location_element = await self.page.wait_for_selector(selector, timeout=2000)
+                                        if location_element:
+                                            job_location = await location_element.inner_text()
+                                            break
+                                    except:
+                                        continue
+                        except Exception as e:
+                            print(f"⚠️ Error getting details from panel: {str(e)}")
                     
                     # Extract job URL
                     link_selectors = [
